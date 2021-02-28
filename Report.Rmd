@@ -1,0 +1,85 @@
+---
+title: "Report"
+output: html_document
+---
+
+
+```{r reading MiXCR output, message=FALSE}
+library(tidyverse, quietly = T)
+require(ggplot2); theme_set(theme_bw())
+
+# If labeled by aa or nt CDR3 sequence
+aa <- F
+
+# reading output of MiXCR alignment
+neg <- read.table("MiXCR/analysis_1.clonotypes.IGH.txt", header = T, sep = "\t")
+pos_1 <- read.table("MiXCR/analysis_2.clonotypes.IGH.txt", header = T, sep = "\t")
+pos_2 <- read.table("MiXCR/analysis_3.clonotypes.IGH.txt", header = T, sep = "\t")
+
+pos <- bind_rows(pos_1, pos_2)
+
+filtered_positive <- pos %>% filter(case_when(
+        aa ~!aaSeqCDR3 %in% neg$aaSeqCDR3,
+        !aa ~!nSeqCDR3 %in% neg$nSeqCDR3)) %>% mutate(label = 1)
+
+filtered_negative <- neg %>% filter(case_when(
+        aa ~!aaSeqCDR3 %in% pos$aaSeqCDR3,
+        !aa ~!nSeqCDR3 %in% pos$nSeqCDR3)) %>% mutate(label = 0)
+
+features <- bind_rows(filtered_negative, filtered_positive) %>%
+    select_if(~sum(!is.na(.)) > 0) %>%
+        distinct(case_when(aa ~ aaSeqCDR3,
+                          !aa ~ nSeqCDR3), .keep_all = T) %>% select(-matches("case_when"))
+
+
+# Filtering only accepted sequences
+cdr3_pattern <- "CSR[FWY][ADEGHIKLMNPQRSTV][ADEGHIKLMNPQRSTV][ACDFGHILNPRSTVY][GS][FLM]Y[AEKLMPQTV][FHILMNY][ADEHIKLMNPQTV]YW"
+
+features <- features %>% filter(str_detect(aaSeqCDR3, cdr3_pattern))
+
+write.csv(features, "data/feat_2.csv", row.names = F)
+```
+
+Checking dataset ditribution.
+
+```{r repertoire, echo=FALSE}
+library(caret, quietly = T)
+features <- read.csv("data/feat_2.csv")
+features$label <- as.factor(features$label)
+
+# Clonal expansion 
+ggplot(filter(features, cloneId < 1000), aes(x=cloneId, y=cloneFraction, fill=label)) + geom_col()
+table(features$label)
+
+# Balancing dataset
+features <- upSample(select(features, -label), features$label, yname = "label")
+
+table(features$label)
+
+write.csv(features, "data/feat_2.csv", row.names = F)
+
+# CDR3 length 
+features %>% group_by(label) %>% mutate(cdr3_len = str_length(aaSeqCDR3), mean_len = mean(cdr3_len)) %>% 
+ggplot(aes(x=cdr3_len, fill=label)) +
+    geom_bar(position = "identity", stat="count") + xlim(c(0, 40)) +
+        geom_vline(aes(xintercept=mean_len,  colour=label), linetype="dashed", size=1)
+
+```
+
+Selecting only sequences that differ from Trastuzumab CDR3 of at least n positions.
+
+```{r}
+library(stringdist)
+cdr3_drug <- "CSRWGGDGFYAMDYW"
+min_lv_dist <- 8
+
+features <- features %>% filter(stringdist::stringdist(aaSeqCDR3, cdr3_drug, c("lv")) > min_lv_dist)
+
+write.csv(features, "data/feat_2.csv", row.names = F)
+```
+
+```{r echo=F}
+runApp("ML_visual.R")
+```
+
+
