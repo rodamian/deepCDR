@@ -9,7 +9,7 @@ library(tidyverse, quietly = T)
 require(ggplot2); theme_set(theme_bw())
 
 # If labeled by aa or nt CDR3 sequence
-aa <- F
+aa <- T
 
 # reading output of MiXCR alignment
 neg <- read.table("MiXCR/analysis_1.clonotypes.IGH.txt", header = T, sep = "\t")
@@ -40,7 +40,7 @@ features <- features %>% filter(str_detect(aaSeqCDR3, cdr3_pattern))
 write.csv(features, "data/feat_2.csv", row.names = F)
 ```
 
-Checking dataset ditribution.
+Checking CDR3 length ditribution.
 
 ```{r repertoire, echo=FALSE}
 library(caret, quietly = T)
@@ -52,33 +52,49 @@ ggplot(filter(features, cloneId < 1000), aes(x=cloneId, y=cloneFraction, fill=la
 table(features$label)
 
 # Balancing dataset
-features <- upSample(select(features, -label), features$label, yname = "label")
+# features <- upSample(select(features, -label), features$label, yname = "label")
 
 table(features$label)
 
 write.csv(features, "data/feat_2.csv", row.names = F)
 
 # CDR3 length 
-features %>% group_by(label) %>% mutate(cdr3_len = str_length(aaSeqCDR3), mean_len = mean(cdr3_len)) %>% 
-ggplot(aes(x=cdr3_len, fill=label)) +
-    geom_bar(position = "identity", stat="count") + xlim(c(0, 40)) +
-        geom_vline(aes(xintercept=mean_len,  colour=label), linetype="dashed", size=1)
+features <- features %>% mutate(cdr3_len = str_length(aaSeqCDR3), mean_len = mean(cdr3_len))
+features %>% ggplot(aes(x=cdr3_len, fill=label)) + geom_histogram()
+    
 
 ```
+Filtering CDR3 lengths
+```{r}
+features <- features %>% filter(cdr3_len < 20)
+```
 
-Selecting only sequences that differ from Trastuzumab CDR3 of at least n positions.
+
+Distribution of levenstein distances to Trastuzumab.
 
 ```{r}
 library(stringdist)
 cdr3_drug <- "CSRWGGDGFYAMDYW"
-min_lv_dist <- 8
+features$lv_dist <- stringdist::stringdist(features$aaSeqCDR3, cdr3_drug, c("lv"))
+ggplot(features, aes(x=lv_dist, fill=label)) + geom_histogram()
 
-features <- features %>% filter(stringdist::stringdist(aaSeqCDR3, cdr3_drug, c("lv")) > min_lv_dist)
+```
+
+
+
+Selecting only sequences that differ from Trastuzumab CDR3 of at least n positions and not more than m.
+
+```{r}
+min_lv_dist <- 5
+max_lv_dist <- 10
+
+features <- features %>% filter(lv_dist > min_lv_dist, lv_dist < max_lv_dist)
 
 write.csv(features, "data/feat_2.csv", row.names = F)
 ```
 
 ```{r echo=F}
+source("ML_visual.R")
 runApp("ML_visual.R")
 ```
 

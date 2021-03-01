@@ -1,9 +1,8 @@
 
 
-def run_models(file, model, to_use, enc="onehot"):
+def run_models(file, model, to_use, enc="onehot", return_prediction=True):
     
     import copy
-    import os
     import numpy as np
     import matplotlib.pyplot as plt
     from numpy.random import uniform
@@ -13,37 +12,50 @@ def run_models(file, model, to_use, enc="onehot"):
     from sklearn.metrics import roc_curve, mean_absolute_error, plot_roc_curve, auc
     from sklearn.model_selection import train_test_split, RandomizedSearchCV, StratifiedKFold, cross_validate, KFold
     from sklearn.svm import LinearSVC
+    import keras
+    from keras.layers import Dense, Dropout, Activation, Conv1D, Attention, Input, Embedding, GlobalAveragePooling1D, Concatenate, GlobalMaxPooling1D
+    from keras.layers.convolutional import Conv1D, MaxPooling1D
+    from keras import models, layers, Model
+    from keras import regularizers, losses, optimizers
+    from keras.models import Sequential
+    from keras.layers import Dense
+    from sklearn.metrics import auc
     from sklearn.preprocessing import OneHotEncoder
     from xgboost import DMatrix, cv
     import scipy.sparse as sp
     
     
     def train_model(X, y, params, model, n_jobs=-1, cv=3, n_params=5, ret_score=False):
-        crossv_mod = copy.deepcopy(model)
-        ret_mod = copy.deepcopy(model)
-    
-        grid = RandomizedSearchCV(model, params, cv=cv, scoring='neg_median_absolute_error', verbose=0, n_jobs=n_jobs,
-                                  n_iter=n_params, refit=False)
-        grid.fit(X, y)
-    
-        cv_pred = KFold(n_splits=cv)
-    
-        # Use the same parameters for the training set to get CV predictions
-        crossv_mod.set_params(**grid.best_params_)
-        s = cross_validate(crossv_mod, X=X, y=y, cv=cv_pred, n_jobs=n_jobs, verbose=0, return_train_score=True)
-        scores = [np.mean(s["train_score"]), np.mean(s["test_score"])]
-    
-        # Train the final model
-        ret_mod.set_params(**grid.best_params_)
-        ret_mod.fit(X, y)
-    
-        if ret_score:
-            return scores
-    
-        return ret_mod
-    
+        if not isinstance(model, Sequential):
+            crossv_mod = copy.deepcopy(model)
+            ret_mod = copy.deepcopy(model)
+
+            grid = RandomizedSearchCV(model, params, cv=cv,
+                                      scoring='neg_median_absolute_error', verbose=0, n_jobs=n_jobs,
+                                      n_iter=n_params, refit=False)
+            grid.fit(X, y)
+
+            cv_pred = KFold(n_splits=cv)
+
+            # Use the same parameters for the training set to get CV predictions
+            crossv_mod.set_params(**grid.best_params_)
+            s = cross_validate(crossv_mod, X=X, y=y, cv=cv_pred, n_jobs=n_jobs, verbose=0, return_train_score=True)
+            scores = [np.mean(s["train_score"]), np.mean(s["test_score"])]
+
+            # Train the final model
+            ret_mod.set_params(**grid.best_params_)
+            ret_mod.fit(X, y)
+
+            return ret_mod
+
+        else:
+            model.fit(X,y)
+            return model
+
+
     # ~~~~~~~ Models ~~~~~~~~~~~~~~~~~~
-    
+
+
     class XGBoostModel:
         def __init__(self, regressor=False):
             self.parameters = {'n_estimators': list(range(10, 200, 1)), 'max_depth': list(range(1, 12)),
@@ -69,30 +81,28 @@ def run_models(file, model, to_use, enc="onehot"):
     
         def get_importance(self):
             return self.model.feature_importances_
-    
+
     class NeuralNet:
-        def __init__(self):
+        def __init__(self, dimension=None):
             self.parameters = {"activation": ["relu", "sigmoid"]}
-    
-            def create_model(in_shape):
-                model = models.Sequential()
-                model.add(Dense(32, kernel_regularizer=regularizers.l2(0.003), activation='relu', input_shape=(in_shape,)))
-                model.add(Dropout(0.5))
-                model.add(Dense(16, kernel_regularizer=regularizers.l2(0.003), activation='relu'))
-                model.add(Dropout(0.6))
+
+            def build_model():
+                model = Sequential()
+                model.add(Dense(120, input_dim=dimension, activation='relu'))
+                model.add(Dense(40, activation='relu'))
+                model.add(Dense(8, activation='relu'))
                 model.add(Dense(1, activation='sigmoid'))
-                model.compile(optimizer='rmsprop', loss='binary_crossentropy', metrics=['accuracy'])
-    
-                return model(**self.parameters)
-    
-            self.model = create_model()
-    
-        def fit(self, data=None, values=None):
-            x_partial_train, y_partial_train, x_validation, y_validation = train_test_split(data, values)
-            self.model.fit(x_partial_train, y_partial_train, validation_data=(x_validation, y_validation))
-    
+                model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+                return model
+
+            self.model = build_model()
+
+        def fit(self, data=None, values=None, epochs=20, batch_size=100):
+            trainX, testX, trainy, testy = train_test_split(data, values)
+            self.model.fit(trainX, trainy, epochs=epochs, batch_size=batch_size)
+
         def predict(self, test_data):
-            probs = self.model.predict_proba(test_data)
+            probs = self.model.predict(test_data)
             return probs
     
     class SVMModel:
@@ -105,7 +115,7 @@ def run_models(file, model, to_use, enc="onehot"):
             self.model = LinearSVC(**self.parameters)
             self.model_cv = None
     
-        def fit(self, data=None, values=None, dm=None, metric="median_absolute_error"):
+        def fit(self, data=None, values=None, dm=None):
             if dm is None:
                 dm = DMatrix(data, label=values)
                 self.model.fit(data, values)
@@ -151,14 +161,12 @@ def run_models(file, model, to_use, enc="onehot"):
     
         ax.set(xlim=[-0.05, 1.05], ylim=[-0.05, 1.05])
         ax.legend(loc="lower right")
-        plt.savefig("AUC.png", dpi=120)
+        plt.savefig("AUC.png", dpi=110)
     
     # ~~~~~~~ Reading data ~~~~~~~~~~~~~~~~~~
     features = file
     target = features.pop("label")
-    if model == "XGB": model = XGBoostModel()
-    if model == "SVM": model = SVMModel()
-    
+
     # ~~~~~~~ Encodings ~~~~~~~~~~~~~~~~~~
     
     # One Hot Encoding
@@ -168,7 +176,7 @@ def run_models(file, model, to_use, enc="onehot"):
         features_oneHot = pd.concat(temp_data, sort=False, axis=1)
         # temporary solution
         features_oneHot.columns = [i for i in range(features_oneHot.shape[1])]
-        features = features_oneHot
+        encoded = features_oneHot
         
     # K-mer encoding
     if enc == "kmer":
@@ -176,117 +184,114 @@ def run_models(file, model, to_use, enc="onehot"):
         features_kmer = features[[to_use]].select_dtypes(exclude=["int", "float"]).applymap(lambda x: " ".join(getKmers(x)))
         cv = CountVectorizer()
         features_kmer = pd.DataFrame(sp.hstack(features_kmer.apply(lambda col: cv.fit_transform(col))).toarray())
-        features = features_kmer
+        encoded = features_kmer
 
-    
-    if model != "NN":
-        # ~~~~~~~ Train test split ~~~~~~~~~~~~~~~~~~
-        trainX, testX, trainy, testy = train_test_split(features, target)
+    # ~~~~~~~ Model creation ~~~~~~~~~~~~~~~~~~
+    if model == "XGB": model = XGBoostModel()
+    if model == "SVM": model = SVMModel()
+    if model == "NN": model = NeuralNet(dimension=encoded.shape[1])
 
-        # ~~~~~~~ Training ~~~~~~~~~~~~~~~~~~
-        best_model = train_model(trainX, trainy, model.parameters, model.model)
+    # ~~~~~~~ Train test split ~~~~~~~~~~~~~~~~~~
+    trainX, testX, trainy, testy = train_test_split(encoded, target)
 
-        # ~~~~~~~ AUC ROC curve ~~~~~~~~~~~~~~~~~~
+    # ~~~~~~~ Training ~~~~~~~~~~~~~~~~~~
+    best_model = train_model(trainX, trainy, model.parameters, model.model)
+
+    if return_prediction:
+        return best_model.predict(testX).flatten(), testy.values
+
+    # ~~~~~~~ AUC ROC curve ~~~~~~~~~~~~~~~~~~
+    else:
         plot_roc(best_model, testX, testy)
 
-        if model == "XGB":
-            # ~~~~~~~ feature importance ~~~~~~~~~~~~~~~~~~
-            plt.plot(best_model.feature_importances)
-            plt.savefig("feat_imp", dpi=120)
+    if model == "XGB":
+        # ~~~~~~~ feature importance ~~~~~~~~~~~~~~~~~~
+        plt.plot(best_model.feature_importances)
+        plt.savefig("feat_imp", dpi=110)
 
 
-# cv = StratifiedKFold(n_splits=5)
-# X = features_oneHot
-# y = target
-#
+# 
+# # Model with attention
 # def create_model():
-#     input_seq = keras.Input(shape=(None,), dtype="int32")
+#     input_seq = keras.Input(shape=(encoded.shape[1],), dtype="int32")
 #     query_input = input_seq
 #     value_input = input_seq
-#     token_embedding = Embedding(12, 1, input_length=features_oneHot.shape[1])  # of shape [batch_size, Tq, dimension]
+#     token_embedding = Embedding(1000, 20, input_length=encoded.shape[1])  # of shape [batch_size, Tq, dimension]
 #     query_embeddings = token_embedding(query_input)  # Value embeddings of shape [batch_size, Tv, dimension]
 #     value_embeddings = token_embedding(value_input)
-#
-#     cnn_layer = Conv1D(filters=100, kernel_size=4, padding='same')
+# 
+#     cnn_layer = Conv1D(filters=100, kernel_size=5, padding='same')
 #     query_seq_encoding = cnn_layer(query_embeddings)  # of shape [batch_size, Tq, filters]
 #     value_seq_encoding = cnn_layer(value_embeddings)  # of shape [batch_size, Tv, filters]
 #     query_value_attention_seq = Attention()([query_seq_encoding, value_seq_encoding])
-#
+# 
 #     # Reduce over the sequence axis to produce encodings of shape [batch_size, filters]
 #     query_encoding = GlobalAveragePooling1D()(query_seq_encoding)
 #     query_value_attention = GlobalAveragePooling1D()(query_value_attention_seq)
-#
+# 
 #     # Concatenate query and document encodings to produce a DNN input layer.
 #     input_layer = Concatenate()([query_encoding, query_value_attention])
-#
-#     x = Dense(128, activation="relu")(input_layer)
-#     preds = Dense(2, activation="softmax")(x)
-#     model = keras.Model(input_seq, preds)
-#     model.compile(loss="sparse_categorical_crossentropy", optimizer="rmsprop", metrics=["acc"])
+# 
+#     dense = layers.Dense(64, activation="relu")
+#     x = dense(input_layer)
+#     x = layers.Dense(64, activation="relu")(x)
+#     outputs = layers.Dense(10)(x)
+# 
+#     model = keras.Model(inputs=input_layer, outputs=outputs)
+#     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+# 
 #     model.summary()
-#
+# 
 #     return model
-#
-# model_clf = KerasClassifier(build_fn=create_model)
-# model_clf.fit(X, y)
-# model_clf.predict_proba(testX)
-#
-# fpr2, tpr2, threshold = roc_curve(testy, model_clf.predict_proba(testX)[:, 1])
-# roc_auc2 = auc(fpr2, tpr2)
-#
-# def plot_for_nn(model, X, y):
-#     aucs = []
-#     for i, (train, test) in enumerate(cv.split(X, y)):
-#         model.fit(X.iloc[train], y.iloc[train], batch_size=300, epochs=1, verbose=2)
-#         probs = model.predict(X.iloc[test])[:, 1]
-#         fpr, tpr, thresholds = roc_curve(y.iloc[test], probs)
-#         aucs.append(auc(fpr, tpr))
-#         plt.plot(fpr, tpr)
-#     roc_auc = np.mean(aucs)
-#     plt.xlabel('False Positive Rate')
-#     plt.ylabel('True Positive Rate')
-#     plt.legend(["mean AUC {0:.{1}f}".format(roc_auc, 3)])
-#     plt.show()
-#
-# plot_for_nn(model_clf, X, y)
+# 
+# model_clf = create_model()
+# model_clf.fit(trainX, trainy, epochs=6)
+# model_clf.predict(testX)
+# 
+# cv = StratifiedKFold(n_splits=5)
+# for i, (train, test) in enumerate(cv.split(features, target)):
+#     model_clf.fit(features.iloc[train], target.iloc[train], batch_size=300, epochs=5, verbose=2)
+#     probs = model_clf.predict(features.iloc[test])[:, 1]
+# 
+# 
+#     if model == "NN":
+#         import keras
+#         from keras.layers import Dense, Dropout, Activation, Conv1D, Attention, Input, Embedding, GlobalAveragePooling1D, Concatenate, GlobalMaxPooling1D
+#         from keras.layers.convolutional import Conv1D, MaxPooling1D
+#         from keras import models, layers, Model
+#         from keras import regularizers, losses, optimizers
+#         from keras.models import Sequential
+#         from keras.layers import Dense
+#         from sklearn.metrics import auc
+# 
+#         # define the model
+#         def build_model():
+#             model = Sequential()
+#             model.add(Dense(120, input_dim=encoded.shape[1], activation='relu'))
+#             model.add(Dense(40, activation='relu'))
+#             model.add(Dense(8, activation='relu'))
+#             model.add(Dense(1, activation='sigmoid'))
+#             model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+#             return model
+# 
+#         keras_model = build_model()
+# 
+#         # ~~~~~~~ Train test split ~~~~~~~~~~~~~~~~~~
+#         trainX, testX, trainy, testy = train_test_split(encoded, target)
+# 
+#         keras_model.fit(trainX, trainy, epochs=20, batch_size=100, verbose=1)
+# 
+#         fpr_keras, tpr_keras, threshold = roc_curve(testy, keras_model.predict(testX))
+# 
+#         auc_keras = auc(fpr_keras, tpr_keras)
+# 
+#         else:
+#             plt.figure(1)
+#             plt.plot([0, 1], [0, 1], 'k--')
+#             plt.plot(fpr_keras, tpr_keras, label='Keras (area = {:.3f})'.format(auc_keras))
+#             plt.xlabel('False positive rate')
+#             plt.ylabel('True positive rate')
+#             plt.title('ROC curve')
+#             plt.legend(loc='best')
+#             plt.savefig("AUC.png", dpi=110)
 
-    if model == "NN":
-        import keras
-        from keras.wrappers.scikit_learn import KerasClassifier
-        from keras.layers import Dense, Dropout, Activation, Conv1D, Attention, Input, Embedding, GlobalAveragePooling1D, Concatenate, MaxPooling1D, GlobalMaxPooling1D
-        from keras import models, layers
-        from keras import regularizers, losses, optimizers
-        from keras.wrappers.scikit_learn import KerasClassifier
-        from keras.models import Sequential
-        from keras.layers import Dense
-        from sklearn.metrics import auc
-
-        # define the model
-        def build_model():
-            model = Sequential()
-            model.add(Dense(120, input_dim=features.shape[1], activation='relu'))
-            model.add(Dense(40, activation='relu'))
-            model.add(Dense(8, activation='relu'))
-            model.add(Dense(1, activation='sigmoid'))
-            model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-            return model
-
-        keras_model = build_model()
-
-        # ~~~~~~~ Train test split ~~~~~~~~~~~~~~~~~~
-        trainX, testX, trainy, testy = train_test_split(features, target)
-
-        keras_model.fit(trainX, trainy, epochs=20, batch_size=100, verbose=1)
-
-        fpr_keras, tpr_keras, threshold = roc_curve(testy, keras_model.predict(testX))
-
-        auc_keras = auc(fpr_keras, tpr_keras)
-
-        plt.figure(1,figsize=(100, 100))
-        plt.plot([0, 1], [0, 1], 'k--')
-        plt.plot(fpr_keras, tpr_keras, label='Keras (area = {:.3f})'.format(auc_keras))
-        plt.xlabel('False positive rate')
-        plt.ylabel('True positive rate')
-        plt.title('ROC curve')
-        plt.legend(loc='best')
-        plt.savefig("AUC.png", dpi=120)

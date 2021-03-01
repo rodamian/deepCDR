@@ -3,6 +3,7 @@ library(tidyverse)
 options(shiny.maxRequestSize=30*1024^2)
 library(DT)
 library(reticulate)
+library(pROC)
 library(keras)
 
 ui <- bootstrapPage(
@@ -19,36 +20,27 @@ ui <- bootstrapPage(
                           "one hot" = "onehot")),
             selectInput("to_use", "Feature to use:",
                         c("amino acid sequence CDR3" = "aaSeqCDR3"),
-                        multiple = T)
+                        multiple = T),
+            actionButton("run", "Predict specific variants - Run ML model"),
+            actionButton("plot", "Plot repertoire metrics")
         ),
-        mainPanel(plotOutput("AUC", height = 50, width = 50),
-                tableOutput("contents"))
+        mainPanel(plotOutput("AUC", width = "700px", height = "500px")),
     ),
-    fluidRow(column(9, DT::dataTableOutput('seq_table')),
-        actionButton("run", "Predict specific variants - Run ML model"),
-        actionButton("plot", "Plot repertoire metrics")),
-            tabPanel("Plot", column(6, plotOutput("importance")),
+    fluidRow(column(9, DT::dataTableOutput('seq_table'))),
+            tabPanel("Plot", column(6, plotOutput("lev_dist")),
                              column(7, plotOutput("repertoire"))
              )
 )
 
 server <- function(input, output, session) {
-    output$contents <- renderTable({
+    observe({
         file <- input$file1
         ext <- tools::file_ext(file$datapath)
 
         req(file)
         validate(need(ext == "csv", "Please upload a csv file"))
 
-        # Read data
-        outVar = reactive({
-            features <- read.csv(file$datapath, header = input$header)
-            possible_to_use <- colnames(features)
-                })
-            observe({
-                updateSelectInput(session, "to_use",
-                                  choices = outVar()
-            )})
+        features <- read.csv(file$datapath, header = input$header)
 
         # Render table
         output$seq_table <- DT::renderDataTable(
@@ -56,7 +48,21 @@ server <- function(input, output, session) {
                                      pageLength = 20,
                                      columnDefs = list(list(visible=FALSE,
                                                             targets=grep("(?i)all", colnames(features)))
-                                                            )))
+                                     )))
+
+            observe({
+                x <- colnames(read.csv(input$file1$datapath, header = input$header))
+
+                # Can use character(0) to remove all choices
+                if (is.null(x))
+                    x <- character(0)
+
+                # Can also set the label and select items
+                updateSelectInput(session, "to_use",
+                                  choices = x
+                )
+            })
+
         # Run model
         observeEvent(input$run, {
             file <- input$file1
@@ -64,18 +70,37 @@ server <- function(input, output, session) {
             features <- read.csv(file$datapath, header = input$header)
 
             source_python("python/ML_models.py")
-            run_models(file = features,
+            prediction <- run_models(file = features,
                        model = input$model_selected,
                        enc = input$encoding,
                        to_use = input$to_use)
-            output$AUC <- renderImage(outfile <- list(src = "AUC.png",
-                                           alt = "text"), deleteFile = T)
+
+            ROC <- roc(as.numeric(prediction[[2]]), prediction[[1]], ci = T)
+
+            # Confidence intervals
+            # ci.sp <- lapply(rocs, ci.sp, sensitivities=seq(0, 1, .01), boot.n=100)
+            # conf <- lapply(ROC, ci)
+
+            output$AUC <- renderPlot(ggroc(ROC) +
+                geom_abline(slope=1, linetype = "dashed", color = "grey", intercept = 1) +
+                ggtitle(paste0("encoding: ", input$encoding)) +
+                annotate(geom = "text", x = 0.25, y = 0.2, size=6,
+                         label = paste("AUC: ", as.character(round(ROC$auc, 3))))
+            )
         })
 
         observeEvent(input$plot, {
             require(ggplot2); theme_set(theme_bw())
-            require(tidyverse)
 
+            # Clonal expansion
+            output$repertoire <- renderPlot(
+                ggplot(filter(features, cloneId < 1000), aes(x=cloneId, y=cloneFraction, fill=label)) + geom_col())
+
+            # LV distance
+            library(stringdist)
+            cdr3_drug <- "CSRWGGDGFYAMDYW"
+            features$lv_dist <- stringdist::stringdist(features$aaSeqCDR3, cdr3_drug, c("lv"))
+            output$lev_dist <- renderPlot(ggplot(features, aes(x=lv_dist, fill=label)) + geom_histogram())
         })
     })
 }
