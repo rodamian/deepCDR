@@ -71,7 +71,7 @@ server <- function(input, output, session) {
 
             source_python("python/ML_models.py")
             prediction <- run_models(file = features,
-                       model = input$model_selected,
+                       model_name = input$model_selected,
                        enc = input$encoding,
                        to_use = input$to_use)
 
@@ -87,6 +87,9 @@ server <- function(input, output, session) {
                 annotate(geom = "text", x = 0.25, y = 0.2, size=6,
                          label = paste("AUC: ", as.character(round(ROC$auc, 3))))
             )
+            if (input$model_selected != "NN") {
+                output$AUC <- renderImage({list(src = "AUC.png")}, deleteFile = TRUE)
+            }
         })
 
         observeEvent(input$plot, {
@@ -94,13 +97,13 @@ server <- function(input, output, session) {
 
             # Clonal expansion
             output$repertoire <- renderPlot(
-                ggplot(filter(features, cloneId < 1000), aes(x=cloneId, y=cloneFraction, fill=label)) + geom_col())
+                ggplot(filter(features, cloneId < 1000), aes(x=cloneId, y=cloneFraction, fill=as.factor(label))) + geom_col())
 
             # LV distance
             library(stringdist)
             cdr3_drug <- "CSRWGGDGFYAMDYW"
             features$lv_dist <- stringdist::stringdist(features$aaSeqCDR3, cdr3_drug, c("lv"))
-            output$lev_dist <- renderPlot(ggplot(features, aes(x=lv_dist, fill=label)) + geom_histogram())
+            output$lev_dist <- renderPlot(ggplot(features, aes(x=lv_dist, fill=as.factor(label))) + geom_histogram())
         })
     })
 }

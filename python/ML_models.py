@@ -1,6 +1,5 @@
 
-
-def run_models(file, model, to_use, enc="onehot", return_prediction=True):
+def run_models(file, model_name, to_use, enc="onehot"):
     
     import copy
     import numpy as np
@@ -9,18 +8,12 @@ def run_models(file, model, to_use, enc="onehot", return_prediction=True):
     import pandas as pd
     import xgboost as xgb
     from sklearn.feature_extraction.text import CountVectorizer
-    from sklearn.metrics import roc_curve, mean_absolute_error, plot_roc_curve, auc
+    from sklearn.metrics import plot_roc_curve
     from sklearn.model_selection import train_test_split, RandomizedSearchCV, StratifiedKFold, cross_validate, KFold
     from sklearn.svm import LinearSVC
-    import keras
-    from keras.layers import Dense, Dropout, Activation, Conv1D, Attention, Input, Embedding, GlobalAveragePooling1D, Concatenate, GlobalMaxPooling1D
-    from keras.layers.convolutional import Conv1D, MaxPooling1D
-    from keras import models, layers, Model
-    from keras import regularizers, losses, optimizers
     from keras.models import Sequential
     from keras.layers import Dense
     from sklearn.metrics import auc
-    from sklearn.preprocessing import OneHotEncoder
     from xgboost import DMatrix, cv
     import scipy.sparse as sp
     
@@ -49,7 +42,7 @@ def run_models(file, model, to_use, enc="onehot", return_prediction=True):
             return ret_mod
 
         else:
-            model.fit(X,y)
+            model.fit(X, y)
             return model
 
 
@@ -172,11 +165,11 @@ def run_models(file, model, to_use, enc="onehot", return_prediction=True):
     # One Hot Encoding
     if enc == "onehot":
         to_encode = features[[to_use]]
-        temp_data = [pd.get_dummies(to_encode[col].apply(lambda x: pd.Series(list(x))), prefix=col) for col in to_encode.columns]
-        features_oneHot = pd.concat(temp_data, sort=False, axis=1)
+        temp_data = [pd.get_dummies(to_encode[col].apply(lambda x: pd.Series(list(x)))) for col in to_encode.columns]
+        features_onehot = pd.concat(temp_data, sort=False, axis=1)
         # temporary solution
-        features_oneHot.columns = [i for i in range(features_oneHot.shape[1])]
-        encoded = features_oneHot
+        # features_onehot.columns = [i for i in range(features_onehot.shape[1])]
+        encoded = features_onehot
         
     # K-mer encoding
     if enc == "kmer":
@@ -187,9 +180,9 @@ def run_models(file, model, to_use, enc="onehot", return_prediction=True):
         encoded = features_kmer
 
     # ~~~~~~~ Model creation ~~~~~~~~~~~~~~~~~~
-    if model == "XGB": model = XGBoostModel()
-    if model == "SVM": model = SVMModel()
-    if model == "NN": model = NeuralNet(dimension=encoded.shape[1])
+    if model_name == "XGB": model = XGBoostModel()
+    if model_name == "SVM": model = SVMModel()
+    if model_name == "NN": model = NeuralNet(dimension=encoded.shape[1])
 
     # ~~~~~~~ Train test split ~~~~~~~~~~~~~~~~~~
     trainX, testX, trainy, testy = train_test_split(encoded, target)
@@ -197,101 +190,34 @@ def run_models(file, model, to_use, enc="onehot", return_prediction=True):
     # ~~~~~~~ Training ~~~~~~~~~~~~~~~~~~
     best_model = train_model(trainX, trainy, model.parameters, model.model)
 
-    if return_prediction:
-        return best_model.predict(testX).flatten(), testy.values
-
     # ~~~~~~~ AUC ROC curve ~~~~~~~~~~~~~~~~~~
-    else:
+    if model_name != "NN":
         plot_roc(best_model, testX, testy)
 
-    if model == "XGB":
+    if model_name == "XGB":
         # ~~~~~~~ feature importance ~~~~~~~~~~~~~~~~~~
-        plt.plot(best_model.feature_importances)
+
+        len_unique = [sum(encoded.columns.str.startswith((str(i) + "_"))) for i in range(encoded.shape[1])]
+
+        d = {'name': encoded.columns,
+             'value': best_model.feature_importances_}
+        imp = pd.DataFrame(data=d)
+
+        imp.to_csv("data/feat_imp.csv", index_label=False)
+
+        plt.plot(best_model.feature_importances_)
         plt.savefig("feat_imp", dpi=110)
 
+    trainX, testX, trainy, testy = train_test_split(encoded, target)
 
-# 
-# # Model with attention
-# def create_model():
-#     input_seq = keras.Input(shape=(encoded.shape[1],), dtype="int32")
-#     query_input = input_seq
-#     value_input = input_seq
-#     token_embedding = Embedding(1000, 20, input_length=encoded.shape[1])  # of shape [batch_size, Tq, dimension]
-#     query_embeddings = token_embedding(query_input)  # Value embeddings of shape [batch_size, Tv, dimension]
-#     value_embeddings = token_embedding(value_input)
-# 
-#     cnn_layer = Conv1D(filters=100, kernel_size=5, padding='same')
-#     query_seq_encoding = cnn_layer(query_embeddings)  # of shape [batch_size, Tq, filters]
-#     value_seq_encoding = cnn_layer(value_embeddings)  # of shape [batch_size, Tv, filters]
-#     query_value_attention_seq = Attention()([query_seq_encoding, value_seq_encoding])
-# 
-#     # Reduce over the sequence axis to produce encodings of shape [batch_size, filters]
-#     query_encoding = GlobalAveragePooling1D()(query_seq_encoding)
-#     query_value_attention = GlobalAveragePooling1D()(query_value_attention_seq)
-# 
-#     # Concatenate query and document encodings to produce a DNN input layer.
-#     input_layer = Concatenate()([query_encoding, query_value_attention])
-# 
-#     dense = layers.Dense(64, activation="relu")
-#     x = dense(input_layer)
-#     x = layers.Dense(64, activation="relu")(x)
-#     outputs = layers.Dense(10)(x)
-# 
-#     model = keras.Model(inputs=input_layer, outputs=outputs)
-#     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-# 
-#     model.summary()
-# 
-#     return model
-# 
-# model_clf = create_model()
-# model_clf.fit(trainX, trainy, epochs=6)
-# model_clf.predict(testX)
-# 
-# cv = StratifiedKFold(n_splits=5)
-# for i, (train, test) in enumerate(cv.split(features, target)):
-#     model_clf.fit(features.iloc[train], target.iloc[train], batch_size=300, epochs=5, verbose=2)
-#     probs = model_clf.predict(features.iloc[test])[:, 1]
-# 
-# 
-#     if model == "NN":
-#         import keras
-#         from keras.layers import Dense, Dropout, Activation, Conv1D, Attention, Input, Embedding, GlobalAveragePooling1D, Concatenate, GlobalMaxPooling1D
-#         from keras.layers.convolutional import Conv1D, MaxPooling1D
-#         from keras import models, layers, Model
-#         from keras import regularizers, losses, optimizers
-#         from keras.models import Sequential
-#         from keras.layers import Dense
-#         from sklearn.metrics import auc
-# 
-#         # define the model
-#         def build_model():
-#             model = Sequential()
-#             model.add(Dense(120, input_dim=encoded.shape[1], activation='relu'))
-#             model.add(Dense(40, activation='relu'))
-#             model.add(Dense(8, activation='relu'))
-#             model.add(Dense(1, activation='sigmoid'))
-#             model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-#             return model
-# 
-#         keras_model = build_model()
-# 
-#         # ~~~~~~~ Train test split ~~~~~~~~~~~~~~~~~~
-#         trainX, testX, trainy, testy = train_test_split(encoded, target)
-# 
-#         keras_model.fit(trainX, trainy, epochs=20, batch_size=100, verbose=1)
-# 
-#         fpr_keras, tpr_keras, threshold = roc_curve(testy, keras_model.predict(testX))
-# 
-#         auc_keras = auc(fpr_keras, tpr_keras)
-# 
-#         else:
-#             plt.figure(1)
-#             plt.plot([0, 1], [0, 1], 'k--')
-#             plt.plot(fpr_keras, tpr_keras, label='Keras (area = {:.3f})'.format(auc_keras))
-#             plt.xlabel('False positive rate')
-#             plt.ylabel('True positive rate')
-#             plt.title('ROC curve')
-#             plt.legend(loc='best')
-#             plt.savefig("AUC.png", dpi=110)
 
+    # disp = plot_precision_recall_curve(best_model, testX, testy)
+    # y_score = best_model.decision_function(testX)
+    #
+    # from sklearn.metrics import average_precision_score
+    # average_precision = average_precision_score(y_test, y_score)
+    #
+    # disp.ax_.set_title('2-class Precision-Recall curve: '
+    #                    'AP={0:0.2f}'.format(average_precision))
+
+    return best_model.predict(testX).flatten(), testy.values

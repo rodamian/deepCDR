@@ -3,6 +3,48 @@ title: "Report"
 output: html_document
 ---
 
+Run MiXCR on raw seq data.
+
+```{bash eval=FALSE, engine.opts='-l', include=FALSE}
+mixcr analyze amplicon --species hsa --starting-material dna --5-end no-v-primers --3-end c-primers --adapters no-adapters "data/BSSE_QGF_115935_000000000_CBD4K_1_mHER_H3_3_AgN_AGTCAA_S13_L001_R1_001_MM_1.fastq" "data/BSSE_QGF_115935_000000000_CBD4K_1_mHER_H3_3_AgN_AGTCAA_S13_L001_R2_001_MM_1.fastq" MiXCR/analysis_1
+
+mixcr analyze amplicon --species hsa --starting-material dna --5-end no-v-primers --3-end c-primers --adapters no-adapters "data/BSSE_QGF_115936_000000000_CBD4K_1_mHER_H3_3_2Ag647_AGTTCC_S14_L001_R1_001_MM_1.fastq" "data/BSSE_QGF_115936_000000000_CBD4K_1_mHER_H3_3_2Ag647_AGTTCC_S14_L001_R2_001_MM_1.fastq" MiXCR/analysis_2
+
+mixcr analyze amplicon --species hsa --starting-material dna --5-end no-v-primers --3-end c-primers --adapters no-adapters "data/BSSE_QGF_115937_000000000_CBD4K_1_mHER_H3_3_2Ag488_ATGTCA_S15_L001_R1_001_MM_1.fastq" "data/BSSE_QGF_115937_000000000_CBD4K_1_mHER_H3_3_2Ag488_ATGTCA_S15_L001_R2_001_MM_1.fastq" MiXCR/analysis_3
+
+```
+
+
+To run IgBLAST fasta sequences for V,D,J germline genes have to be downloaded from IGMT.
+
+```{r}
+v_genes_url <- "http://www.imgt.org/download/V-QUEST/IMGT_V-QUEST_reference_directory/Homo_sapiens/IG/IGHV.fasta"
+d_genes_url <- "http://www.imgt.org/download/V-QUEST/IMGT_V-QUEST_reference_directory/Homo_sapiens/IG/IGHD.fasta"
+j_genes_url <- "http://www.imgt.org/download/V-QUEST/IMGT_V-QUEST_reference_directory/Homo_sapiens/IG/IGHJ.fasta"
+
+download.file(v_genes_url, "igblast/database/IGHV.fasta", quiet = FALSE, mode = "w", headers = NULL)
+download.file(d_genes_url, "igblast/database/IGHD.fasta", quiet = FALSE, mode = "w", headers = NULL)
+download.file(j_genes_url, "igblast/database/IGHJ.fasta", quiet = FALSE, mode = "w", headers = NULL)
+```
+
+
+```{bash eval=FALSE, engine.opts='-l', include=FALSE}
+cd igblast
+
+bin/edit_imgt_file.pl database/IGHV.fasta > IGHV.db
+bin/edit_imgt_file.pl database/IGHD.fasta > IGHD.db
+bin/edit_imgt_file.pl database/IGHJ.fasta > IGHJ.db
+
+bin/makeblastdb -parse_seqids -dbtype nucl -in IGHV.db
+bin/makeblastdb -parse_seqids -dbtype nucl -in IGHD.db
+bin/makeblastdb -parse_seqids -dbtype nucl -in IGHJ.db
+
+bin/igblastn -germline_db_V IGHV.db -germline_db_J IGHJ.db -germline_db_D IGHD.db -query myseq/BSSE_QGF_115935_000000000_CBD4K_1_mHER_H3_3_AgN_AGTCAA_S13_L001_R1_001_MM_1.fastq -auxiliary_data -show_translation
+
+bin/igblastn -germline_db_V IGHV.db -germline_db_J IGHJ.db -germline_db_D IGHD.db -query ../data/BSSE_QGF_115935_000000000_CBD4K_1_mHER_H3_3_AgN_AGTCAA_S13_L001_R1_001_MM_1.fastq -auxiliary_data -show_translation -remote
+```
+
+
 
 ```{r reading MiXCR output, message=FALSE}
 library(tidyverse, quietly = T)
@@ -51,7 +93,7 @@ features$label <- as.factor(features$label)
 ggplot(filter(features, cloneId < 1000), aes(x=cloneId, y=cloneFraction, fill=label)) + geom_col()
 table(features$label)
 
-# Balancing dataset
+# Balancing dataset if needed
 # features <- upSample(select(features, -label), features$label, yname = "label")
 
 table(features$label)
@@ -81,11 +123,10 @@ ggplot(features, aes(x=lv_dist, fill=label)) + geom_histogram()
 ```
 
 
-
 Selecting only sequences that differ from Trastuzumab CDR3 of at least n positions and not more than m.
 
 ```{r}
-min_lv_dist <- 5
+min_lv_dist <- 3
 max_lv_dist <- 10
 
 features <- features %>% filter(lv_dist > min_lv_dist, lv_dist < max_lv_dist)
@@ -98,4 +139,21 @@ source("ML_visual.R")
 runApp("ML_visual.R")
 ```
 
+Exploring feature importance (unfinished).
 
+```{r}
+if (file.exists("data/feat_imp.csv")) {
+    imp = read.csv("data/feat_imp.csv")
+}
+
+imp <- imp %>% mutate(pos = parse_number(name), aa = gsub("[^[:upper:]]", "", name)) %>% select(-name) %>% group_split(pos)
+
+aa <- c("G", "P", "A", "V", "L", "I", "M", "C", "F", "Y", "W","H","K","R","Q","N", "E","D","S","T")
+
+b <- data.frame(aa)
+
+try <- map(a, ~complete(select(., c(value, aa)), b)) %>% reduce(left_join, by = "aa") %>% 
+    replace(is.na(.), 0) %>% select(-aa)
+
+boxplot(try, use.cols = TRUE)
+```
